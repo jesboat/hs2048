@@ -2,7 +2,7 @@
         RecordWildCards, NamedFieldPuns,
         GADTs,
         ImplicitParams,
-        RankNTypes
+        RankNTypes, ScopedTypeVariables
   #-}
 
 import Prelude hiding (Right, Left, any)
@@ -17,6 +17,7 @@ import System.Random
 import Utils
 import Data.Char
 import System.IO
+import Data.IORef
 
 
 gameSize = 4
@@ -25,8 +26,6 @@ gameIndexes = [0 .. gameSize - 1]
 
 
 type GameM a = State Game a
-
-type RandomM a = Pr.T Rational a
 
 
 data Position = Position {
@@ -277,6 +276,17 @@ render Game{grid, score} = rows ++ ["Score: " ++ show score]
 data Command = Move Direction | Quit | BadCommand
     deriving (Eq, Show)
 
+letterToMove :: Char -> Maybe Command
+letterToMove c =
+    case c of
+        'a'           -> return $ Move Left
+        's'           -> return $ Move Down
+        'd'           -> return $ Move Right
+        'w'           -> return $ Move Up
+        'q'           -> return $ Quit
+        _ | isSpace c -> Nothing
+          | otherwise -> return $ BadCommand
+
 getMoveStdin :: IO Command
 getMoveStdin = do
     eof <- isEOF
@@ -284,22 +294,25 @@ getMoveStdin = do
     then return Quit 
     else do
             c <- getChar
-            case c of
-                'a'           -> return $ Move Left
-                's'           -> return $ Move Down
-                'd'           -> return $ Move Right
-                'w'           -> return $ Move Up
-                'q'           -> return $ Quit
-                _ | isSpace c -> getMoveStdin
-                  | otherwise -> return $ BadCommand
+            case letterToMove c of
+                Just command -> return command
+                Nothing      -> getMoveStdin
 
 data RandomPicker where
-    RandomPicker :: (forall a. (Show a, Ord a) => RandomM a -> IO a) -> RandomPicker
+    RandomPicker :: (forall a. (Ord a, Show a) => RandomM a -> IO a) -> RandomPicker
 
-pick :: (?thePicker :: RandomPicker, Show a, Ord a) => RandomM a -> IO a
+data MoveGetter where
+    MoveGetter :: IO Command -> MoveGetter
+
+pick :: (?thePicker :: RandomPicker, Ord a, Show a) => RandomM a -> IO a
 pick dist = let (RandomPicker picker) = ?thePicker in picker dist
 
-playGame :: (?thePicker :: RandomPicker) => Game -> IO Game
+getMove :: (?theMoveGetter :: MoveGetter) => IO Command
+getMove = let (MoveGetter g) = ?theMoveGetter in g
+
+playGame :: (?thePicker :: RandomPicker,
+             ?theMoveGetter :: MoveGetter) =>
+            Game -> IO Game
 playGame = loop
     where
         loop :: Game -> IO Game
@@ -309,7 +322,7 @@ playGame = loop
             if game'movesAvailable game
             then do
                     putStr "> "
-                    m <- getMoveStdin
+                    m <- getMove
                     case m of
                         Quit ->
                             return game
@@ -323,19 +336,25 @@ playGame = loop
                     putStrLn "Game over."
                     return game
 
-play :: (?thePicker :: RandomPicker) => IO Game
+play :: (?thePicker :: RandomPicker,
+         ?theMoveGetter :: MoveGetter) => IO Game
 play =
     do
         game0 <- pick game'new
         playGame game0
 
 withRandom :: ((?thePicker :: RandomPicker) => r)
-            -> (forall a. (Show a, Ord a) => RandomM a -> IO a)
+            -> (forall a. (Ord a, Show a) => RandomM a -> IO a)
             -> r
 thunk `withRandom` rand = (let ?thePicker = RandomPicker rand in thunk)
 
+withMoveGetter :: ((?theMoveGetter :: MoveGetter) => r)
+                -> IO Command
+                -> r
+thunk `withMoveGetter` mover = (let ?theMoveGetter = MoveGetter mover in thunk)
+
 main :: IO ()
-main = (do { play; return () }) `withRandom` pickRandom
+main = (do { play; return () }) `withRandom` pickRandom `withMoveGetter` getMoveStdin
 
 
 
@@ -370,3 +389,43 @@ gameSuccs g = concat $ mapMaybe moveIn allDirections
                         (False, _) -> Nothing
                         (True, dist) -> Just $ Pr.extract dist
 
+
+moveGetterFromList :: String -> IO (IO Command)
+moveGetterFromList moves0 =
+    do
+        mut <- newIORef moves0
+        let getter = do
+                        moves <- readIORef mut
+                        case moves of
+                            (m:rest) -> do
+                                            writeIORef mut rest
+                                            let (Just mov) = letterToMove m
+                                            return mov
+                            [] -> fail "Out of moves"
+        return getter
+
+minimalGame =
+    do
+        (rand :: forall a. (Ord a, Show a) => RandomM a -> IO a)
+            <- makePickerFromList randoms
+        move <- moveGetterFromList moves
+        play `withRandom` rand `withMoveGetter` move
+    where
+        script = words $ concat $ intersperse " " [
+                "261",
+                "d 7",
+                "a 14",
+                "w 24",
+                "d 5",
+                "a 3",
+                "d 16",
+                "w 16",
+                "d 7",
+                "d 12",
+                "d 4",
+                "w 5",
+                "a 1",
+                "a 3",
+                "a 1"]
+        moves = concat $ filter (all isLetter) script
+        randoms = map (read :: String -> Int) $ filter (all isDigit) script

@@ -1,9 +1,11 @@
 {-# LANGUAGE
         FlexibleInstances, TypeSynonymInstances,
-        OverlappingInstances, IncoherentInstances
+        OverlappingInstances, IncoherentInstances,
+        RankNTypes, ImpredicativeTypes
   #-}
 
 module Utils (
+        RandomM,
         showem,
         iterateIM,
         printPr,
@@ -13,7 +15,8 @@ module Utils (
         toFreqsWithDenom,
         selectPr,
         pickRandom,
-        pickUser
+        pickUser,
+        makePickerFromList
     ) where
 
 import Data.List (intersperse, sortBy)
@@ -23,6 +26,7 @@ import System.Random (randomRIO)
 import Text.Printf (printf)
 import Data.Char (isDigit)
 import System.IO (isEOF)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Numeric.Probability.Distribution as Pr
 
 
@@ -113,10 +117,12 @@ getIntStdin (min, max) = loop where
                         else loop
                     _                          -> loop
 
-pickUser :: (Ord v, Show v) => RandomM v -> IO v
-pickUser dist = do
+fixedRng :: (Ord v, Show v) =>
+            ([[String]] -> IO Int)
+            -> RandomM v -> IO v
+fixedRng io dist = do
                     mapM_ (mapM_ putStrLn) choices
-                    idx <- getIntStdin (1, length choices)
+                    idx <- io choices
                     let (picked, pr) = pairs !! (idx - 1)
                     return picked
     where
@@ -126,4 +132,27 @@ pickUser dist = do
             [printf "%02f  choice %u" (fromRational pr :: Float) index]
             ++
             (map ("  " ++) $ lines $ show value)
+
+pickUser :: (Ord v, Show v) => RandomM v -> IO v
+pickUser dist = fixedRng io dist
+    where
+        io choices = do
+                        mapM_ (mapM_ putStrLn) choices
+                        getIntStdin (1, length choices)
+
+makePickerFromList ::
+    [Int] -> IO (forall v. (Ord v, Show v) => RandomM v -> IO v)
+makePickerFromList picks0 =
+        do
+            mut <- newIORef picks0
+            let taker _ = do
+                            picks <- readIORef mut
+                            case picks of
+                                (pick:rest) -> do
+                                                   writeIORef mut rest
+                                                   return pick
+                                [] -> fail "Out of 'random' choices"
+            ((return :: ((forall v. (Ord v, Show v) => RandomM v -> IO v) ->
+                        IO (forall v. (Ord v, Show v) => RandomM v -> IO v)))
+             (fixedRng taker))
 
