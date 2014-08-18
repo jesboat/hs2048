@@ -1,5 +1,8 @@
 {-# LANGUAGE
-        RecordWildCards, NamedFieldPuns, RecordWildCards
+        RecordWildCards, NamedFieldPuns,
+        GADTs,
+        ImplicitParams,
+        RankNTypes
   #-}
 
 import Prelude hiding (Right, Left, any)
@@ -288,9 +291,15 @@ getMoveStdin = do
                 'w'           -> return $ Move Up
                 'q'           -> return $ Quit
                 _ | isSpace c -> getMoveStdin
-                  | otherwise -> return $BadCommand
+                  | otherwise -> return $ BadCommand
 
-playGame :: Game -> IO Game
+data RandomPicker where
+    RandomPicker :: (forall a. (Show a, Ord a) => RandomM a -> IO a) -> RandomPicker
+
+pick :: (?thePicker :: RandomPicker, Show a, Ord a) => RandomM a -> IO a
+pick dist = let (RandomPicker picker) = ?thePicker in picker dist
+
+playGame :: (?thePicker :: RandomPicker) => Game -> IO Game
 playGame = loop
     where
         loop :: Game -> IO Game
@@ -314,17 +323,20 @@ playGame = loop
                     putStrLn "Game over."
                     return game
 
-play :: a -> IO Game
-play dontMakeMeCAF =
+play :: (?thePicker :: RandomPicker) => IO Game
+play =
     do
         game0 <- pick game'new
         playGame game0
 
-pick :: (Show a, Ord a) => RandomM a -> IO a
-pick = pickRandom
+withRandom :: ((?thePicker :: RandomPicker) => r)
+            -> (forall a. (Show a, Ord a) => RandomM a -> IO a)
+            -> r
+thunk `withRandom` rand = (let ?thePicker = RandomPicker rand in thunk)
 
 main :: IO ()
-main = play undefined >> return ()
+main = (do { play; return () }) `withRandom` pickRandom
+
 
 
 
@@ -340,7 +352,6 @@ searchLoopB bestSoFar queueThis queueNext =
             else if game'movesAvailable g
                  then searchLoopB bestSoFar gs ((gameSuccs g) : queueNext)
                  else searchLoopB (Just (score g, g)) gs queueNext
-
 
 searchLoopD :: Maybe (Int, Game) -> [Game] -> [(Int, Game)]
 searchLoopD bestSoFar queue =

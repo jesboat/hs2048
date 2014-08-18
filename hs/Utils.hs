@@ -12,13 +12,17 @@ module Utils (
         maybemeh,
         toFreqsWithDenom,
         selectPr,
-        pickRandom
+        pickRandom,
+        pickUser
     ) where
 
 import Data.List (intersperse, sortBy)
 import Data.Function (on)
 import Data.Ratio (numerator, denominator)
 import System.Random (randomRIO)
+import Text.Printf (printf)
+import Data.Char (isDigit)
+import System.IO (isEOF)
 import qualified Numeric.Probability.Distribution as Pr
 
 
@@ -91,4 +95,35 @@ pickRandom dist = do
                     i <- randomRIO (0, denom - 1)
                     return $ selectPr i pairs
 
+getIntStdin :: (Int, Int) -> IO Int
+getIntStdin (min, max) = loop where
+    loop = do
+        putStr "> "
+        eof <- isEOF
+        if eof
+        then fail "Unexpected EOF when reading choice"
+        else do
+                line <- getLine
+                case line of
+                    "q"                        -> fail "Quit requested"
+                    (_:_) | all isDigit line   ->
+                        let v = read line in
+                        if min <= v && v <= max
+                        then return v
+                        else loop
+                    _                          -> loop
+
+pickUser :: (Ord v, Show v) => RandomM v -> IO v
+pickUser dist = do
+                    mapM_ (mapM_ putStrLn) choices
+                    idx <- getIntStdin (1, length choices)
+                    let (picked, pr) = pairs !! (idx - 1)
+                    return picked
+    where
+        pairs = sortBy (compare `on` snd) $ Pr.norm' $ Pr.decons dist
+        choices = map formatChoice $ zip pairs [1 :: Int ..]
+        formatChoice ((value, pr), index) =
+            [printf "%02f  choice %u" (fromRational pr :: Float) index]
+            ++
+            (map ("  " ++) $ lines $ show value)
 
